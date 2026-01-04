@@ -30,23 +30,60 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install ESLint
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
         run: |
-          npm install eslint@8.57.0
-          npm install @microsoft/eslint-formatter-sarif@^3.1.0
+          if [ -f package-lock.json ]; then
+            npm ci
+          elif [ -f package.json ]; then
+            npm install
+          else
+            echo "No package.json found; installing ESLint and SARIF formatter only."
+          fi
+
+          # Ensure SARIF formatter is present even if not in devDependencies.
+          npm install --no-save @microsoft/eslint-formatter-sarif@^3.1.0
+
+          # If the repo doesn't pin ESLint, install a known-good version.
+          if ! npx --no-install eslint --version >/dev/null 2>&1; then
+            npm install --no-save eslint@8.57.0
+          fi
 
       - name: Run ESLint
+        id: eslint
         env:
           SARIF_ESLINT_IGNORE_SUPPRESSED: "true"
         run: |
+          rm -f eslint-results.sarif
+
+          set +e
           npx eslint . \
             --ext .js,.jsx,.ts,.tsx \
             --format @microsoft/eslint-formatter-sarif \
             --output-file eslint-results.sarif
-        continue-on-error: true
+          ESLINT_EXIT_CODE="$?"
+          set -e
+
+          if [ -f eslint-results.sarif ]; then
+            echo "sarif=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "sarif=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          # ESLint exit codes: 0 = no issues, 1 = lint issues found, 2 = config/runtime error.
+          # Fail the job for runtime/config errors (e.g., missing plugins/config), but keep going for lint findings
+          # so SARIF results can be uploaded.
+          if [ "$ESLINT_EXIT_CODE" -eq 2 ]; then
+            exit 2
+          fi
 
       - name: Upload analysis results to GitHub
         uses: github/codeql-action/upload-sarif@v3
+        if: always() && steps.eslint.outputs.sarif == 'true'
         with:
           sarif_file: eslint-results.sarif
           wait-for-processing: true
