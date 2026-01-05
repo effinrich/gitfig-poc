@@ -1,0 +1,58 @@
+# This workflow runs ESLint static analysis and uploads results to GitHub Code Scanning.
+# Unlike the default GitHub template, this workflow properly installs project dependencies
+# so that ESLint plugins (e.g., @typescript-eslint/*, eslint-plugin-react, @nx/eslint-plugin)
+# are available during analysis.
+
+name: ESLint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "30 5 * * 1" # Run weekly on Mondays at 5:30 UTC
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  eslint:
+    name: Run ESLint scanning
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      # Install ALL project dependencies to ensure ESLint plugins are available
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      # Install SARIF formatter (may already be a transitive dep, but ensure it's available)
+      - name: Install ESLint SARIF formatter
+        run: npm install @microsoft/eslint-formatter-sarif --save-dev
+
+      - name: Run ESLint
+        run: |
+          npx eslint . \
+            --ext .js,.jsx,.ts,.tsx \
+            --format @microsoft/eslint-formatter-sarif \
+            --output-file eslint-results.sarif \
+            --ignore-pattern "node_modules/" \
+            --ignore-pattern "dist/" \
+            --ignore-pattern ".nx/"
+        # Don't fail the workflow on lint errors - we still want to upload results
+        continue-on-error: true
+
+      - name: Upload analysis results to GitHub
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: eslint-results.sarif
+          wait-for-processing: true
